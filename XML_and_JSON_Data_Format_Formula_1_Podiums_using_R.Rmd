@@ -1,0 +1,299 @@
+---
+title: "XML and JSON Format Data - Formula 1 Podiums using R - by drewfrobot 2019"
+output: html_document
+---
+
+## XML and JSON Format Data - Formula 1 Podiums using R
+
+A lot of data available on the web, via download but more particularly via API's, is in XML or JSON format. These formats are not tabular like data frames or tables, but are hierarchical, serialised, and a little trickier to work with. They are not unlike the list structure in R, consisting of lists of lists and can be deeply nested. 
+
+The purpose of this notebook is to import XML and JSON format data into R and transform it into data frame format to use with the regular suite of tools available in R.
+
+#Loading Libraries and Options
+
+```{r}
+if (!require('readr', character.only=T, quietly=T)) {
+  install.packages('readr')
+  library('readr', character.only=T)
+}
+if (!require('curl', character.only=T, quietly=T)) {
+  install.packages('curl')
+  library('curl', character.only=T)
+}
+if (!require('xml2', character.only=T, quietly=T)) {
+  install.packages('xml2')
+  library('xml2', character.only=T)
+}
+if (!require('plyr', character.only=T, quietly=T)) {
+  install.packages('plyr')
+  library('plyr', character.only=T)
+}
+if (!require('stringr', character.only=T, quietly=T)) {
+  install.packages('stringr')
+  library('stringr', character.only=T)
+}
+if (!require('data.table', character.only=T, quietly=T)) {
+  install.packages('data.table')
+  library('data.table', character.only=T)
+}
+if (!require('rjson', character.only=T, quietly=T)) {
+  install.packages('rjson')
+  library('rjson', character.only=T)
+}
+if (!require('visNetwork', character.only=T, quietly=T)) {
+  install.packages('visNetwork')
+  library('visNetwork', character.only=T)
+}
+
+options(stringsAsFactors = FALSE)
+
+```
+
+#The Data - Preview
+
+The very good people at Ergast (https://ergast.com/mrd/) have provided an API which gives access to a lot of data relating to Formula 1 races from 1950 through to today. Terms of Use are available at https://ergast.com/mrd/terms/. 
+
+The API is queried by URL formatted requests, and the returned data is in XML or JSON format.
+
+Let's have a look at the raw data from the API calls. Head over to https://codebeautify.org/xmlviewer and  https://codebeautify.org/jsonviewer and load the API calls https://ergast.com/api/f1/2014/results/1.xml and https://ergast.com/api/f1/2014/results/1.json respectively to get a "prettier" picture.
+
+An excerpt of the XML code is
+
+			<ResultsList>
+				<Result number="6" position="1" positionText="1" points="25">
+					<Driver driverId="rosberg" code="ROS" url="http://en.wikipedia.org/wiki/Nico_Rosberg">
+						<PermanentNumber>6</PermanentNumber>
+						<GivenName>Nico</GivenName>
+						<FamilyName>Rosberg</FamilyName>
+						<DateOfBirth>1985-06-27</DateOfBirth>
+						<Nationality>German</Nationality>
+					</Driver>
+					
+within the <Driver> "element", the driverId and code data are stored as "attributes"", whereas the GivenName and FamilyName are given as "text" content.
+
+An excerpt of the JSON code is 
+
+         "Results": [
+            {
+              "number": "6",
+              "position": "1",
+              "positionText": "1",
+              "points": "25",
+              "Driver": {
+                "driverId": "rosberg",
+                "permanentNumber": "6",
+                "code": "ROS",
+                "url": "http://en.wikipedia.org/wiki/Nico_Rosberg",
+                "givenName": "Nico",
+                "familyName": "Rosberg",
+                "dateOfBirth": "1985-06-27",
+                "nationality": "German"
+
+JSON is a mixture of arrays (eg Results) and objects (eg Driver) which have key/value pairs (eg key "driverId" paired with value "rosberg")
+
+The nested, serial, hierarchical, list of list structure of XML and JSON is quite evident.
+
+JSON uses arrays to structure plural instances of the same object, XML does not. This can cause difficulties in using JSON, where the format varies between singular and plural instances.
+
+#The Data - XML
+
+So let's get some data. The following code queries the API for a small number of years for drivers who finished on the podium i.e. they finished first, second or third. The API seems to be limited to a single year and single podium position per API call. 
+
+The code is basically nested 'for loops', one for the year and one for the podium postion. Each API call is returned and stored in an array/list. The R function "paste0" structures each API call for the different years/podiums.
+
+This call is for data in XML format, making use of the 'xml2' library.
+
+```{r}
+start_year <- 2014
+finish_year <- 2019
+xml_results_temp <- list()
+for (i in (start_year:finish_year)) {
+	for (j in (1:3)) {
+		xml_results_temp[[(i-start_year)*3+j]] <- read_xml(curl(paste0("http://ergast.com/api/f1/",i,"/results/",j,".xml")))
+		Sys.sleep(1)
+	}
+}
+```
+
+Before we go any further we will remove the namespace details from the xml, it won't be needed for our purposes.
+
+```{r}
+xml_results_temp_ns <- lapply(xml_results_temp,xml_ns_strip)
+```
+
+There are many different methods to obtain the data from an XML data set. There are functions which have the capacity to transform an XML data set directly to a data frame. In the author's experience these more often than not hit hurdles, and they find the following approach to be the simplest overall and has been easily applied to all data sets encountered so far. Inevitably only a small amount of the data is usually used, and a targeted approach retrieving only what is needed is quite efficient.
+
+lapply is a powerful function in r, essentially looping over a list and performing the same function to each element of the list. It is base R code and much faster than using 'for loops'. xml_find_all finds all elements matching a "path" eg ".//Result//Driver". The nomenclature used is from the XPath specification. The addition of the "." at the start means the path can occur anywhere in the XML, not bound to the root node. The functions xml_attr and xml_text then extract the attribute or text value, and all of this is stored in a list.
+
+```{r}
+xml_results_edit <- lapply(xml_results_temp_ns, function (x)
+	{
+		list(
+				season=xml_attr(xml_find_all(x,".//Race"),"season"),
+				round=xml_attr(xml_find_all(x,".//Race"),"round"),
+				Locality=xml_text(xml_find_all(x,".//Circuit//Location//Locality"),"Locality"),
+				Country=xml_text(xml_find_all(x,".//Circuit//Location//Country"),"Country"),
+				Date=xml_text(xml_find_all(x,".//Date"),"Date"),
+				finishposition=xml_attr(xml_find_all(x,".//Result"),"position"),
+				driverId=xml_attr(xml_find_all(x,".//Result//Driver"),"driverId"),
+				drivercode=xml_attr(xml_find_all(x,".//Result//Driver"),"code"),
+				driverGivenName=xml_text(xml_find_all(x,".//Result//Driver//GivenName"),"GivenName"),
+				driverFamilyName=xml_text(xml_find_all(x,".//Result//Driver//FamilyName"),"FamilyName"),
+				driverNationality=xml_text(xml_find_all(x,".//Result//Driver//Nationality"),"Nationality"),
+				constructorId=xml_attr(xml_find_all(x,".//Result//Constructor"),"constructorId"),
+				constructorName=xml_text(xml_find_all(x,".//Result//Constructor//Name"),"Name"),
+				constructorNationality=xml_text(xml_find_all(x,".//Result//Constructor//Nationality"),"Nationality")
+		)
+	}
+)
+```
+
+This gives a list of lists, and to transform this to a data frame all that is needed is the powerful ldply function from the plyr library, which unfolds the list neatly into a data frame.
+
+```{r}
+xml_results_edit_ldply <- ldply(xml_results_edit,data.frame)
+head(xml_results_edit_ldply,10)
+```
+
+That looks a lot more familiar!
+
+#The Data - JSON
+
+Now for the same data in JSON format, making use of the 'rjson' library. Often keeping the JSON in full list of list format makes further processing easier.
+
+```{r}
+start_year <- 2014
+finish_year <- 2019
+json_results <- list()
+for (i in (start_year:finish_year)) {
+	for (j in (1:3)) {
+		json_results[[(i-start_year)*3+j]] <- fromJSON(file=URLencode(paste0("http://ergast.com/api/f1/",i,"/results/",j,".json")))
+		Sys.sleep(1)
+	}
+}
+```
+
+The approach here is to use the powerful ldply function to unfold each element of the list to a data frame, use lapply to 'apply' ldply to each element, then use rbindlist from the data.table library to join all of the individual data frames together. All in one command!
+
+```{r}
+json_results_ldply <- rbindlist(lapply(json_results, function (x) ldply(x[["MRData"]][["RaceTable"]][["Races"]],data.frame)))
+```
+
+All that's left to do is to keep only the columns we need and to update the column names to match the XML version.
+
+```{r}
+json_results_ldply_edit <- json_results_ldply[,c("season","round","Circuit.Location.locality","Circuit.Location.country","date","Results.position","Results.Driver.driverId","Results.Driver.code","Results.Driver.givenName","Results.Driver.familyName","Results.Driver.nationality","Results.Constructor.constructorId","Results.Constructor.name","Results.Constructor.nationality")]
+colnames(json_results_ldply_edit) <- c("season","round","Locality","Country","Date","finishposition","driverId","drivercode","driverGivenName","driverFamilyName","driverNationality","constructorId","constructorName","constructorNationality")
+```
+
+Let's check it out.
+
+```{r}
+head(json_results_ldply_edit,10)
+```
+
+#The Podiums Network Visualisation
+
+To create the visualisation using the visNetwork tool, two data frames are needed, describing the "nodes" and "edges"" respectively. The nodes will represent drivers, the bigger the circle the more individual podiums, and hovering over the node will give the drivers full name and exact number of podiums. The edges will represent where two drivers have shared a podium, hovering over will give the number of shared podiums.
+
+We will use the XML produced data frame, however the JSON could easily be used too - they are identical.
+
+```{r}
+results_vis <- xml_results_edit_ldply
+```
+
+OK, let's start with the nodes data frame. First up, identify the unique drivers.
+
+```{r}
+results_ids <- unique(results_vis[, c("driverId","driverGivenName","driverFamilyName","driverNationality","drivercode")])
+head(results_ids,5)
+```
+
+Next up, generate the driver combination pairs, by merging the driver data frame with itself and keeping the combinations where the first driver's name is before the second driver's name. 
+
+```{r}
+results_ids_merge <- merge(results_ids$driverId,results_ids$driverId)
+results_ids_merge_edit <- results_ids_merge[results_ids_merge$x<results_ids_merge$y,]
+head(results_ids_merge_edit,5)
+```
+
+For each individual driver the total podiums are summed using the table function, column names updated and full driver details attached via the merge function
+
+```{r}
+results_ids_count <- as.data.frame(table(results_vis$driverId))
+colnames(results_ids_count) <- c("driverId","podiums")
+results_ids_count_names <- merge(results_ids_count,results_ids)
+head(results_ids_count_names,5)
+```
+
+The visNetwork tool requires a unique numerical reference for each driver, so let's add one.
+
+```{r}
+results_ids_count_names$id <- seq.int(nrow(results_ids_count_names))
+```
+
+The nodes data frame needs a numerical id, a fixed label (driverId) and a hover title (Full Name and Ind. Podiums)
+
+```{r}
+nodes <- data.frame(id=results_ids_count_names$id,label=results_ids_count_names$driverId,title=paste(results_ids_count_names$driverGivenName,results_ids_count_names$driverFamilyName,"-",results_ids_count_names$podiums,"podiums",sep=" "),value=results_ids_count_names$podiums)
+head(nodes,5)
+```
+
+Now onto the edges. The strategy here is to split the data frame into a big list where each element represents a grand prix and contains the three podium drivers, then add the three possible podium pairs sorted alphabetically in a new pairings list.
+
+```{r}
+results_combo <- lapply(split(results_vis,results_vis$Date), function(x) {
+	list(
+		paste(sort(x[["driverId"]])[[1]],sort(x[["driverId"]])[[2]],sep="--"),
+		paste(sort(x[["driverId"]])[[1]],sort(x[["driverId"]])[[3]],sep="--"),
+		paste(sort(x[["driverId"]])[[2]],sort(x[["driverId"]])[[3]],sep="--")
+		)
+	}
+)
+```
+
+Then 'melt' (data.table) the pairings list, count up each individual pairing, then create columns for each individual driver to match with the nodes data set.
+
+```{r}
+results_combo_melt <- melt(results_combo)
+results_combo_melt_count <- as.data.frame(table(results_combo_melt$value))
+results_combo_melt_count_edit <- cbind(results_combo_melt_count,str_split_fixed(results_combo_melt_count$Var1,"--",2))
+head(results_combo_melt_count_edit,5)
+```
+
+Then merge the individual driver details with the pairings data frame.
+
+```{r}
+results_combo_melt_count_edit_ids <- merge(results_combo_melt_count_edit,results_ids_count_names,by.x="1",by.y="driverId")
+results_combo_melt_count_edit_ids2 <- merge(results_combo_melt_count_edit_ids,results_ids_count_names,by.x="2",by.y="driverId")
+head(results_combo_melt_count_edit_ids2,5)
+```
+
+The edges data frame needs from and to columns (driverId's) and a hover title (Number of podiums shared)
+
+```{r}
+edges <- data.frame(from=results_combo_melt_count_edit_ids2$id.x,to=results_combo_melt_count_edit_ids2$id.y,title=paste(results_combo_melt_count_edit_ids2$Freq,"shared podiums",sep=" "))
+head(edges,5)
+```
+
+All that remains is to launch the visualisation!
+
+```{r}
+visNetwork(nodes,edges,height="auto",width="100%") %>% visEdges(color = list(color = "lightblue", highlight = "red", smooth = FALSE))
+```
+
+#Conclusion
+
+XML and JSON formatting is very different than data frames, however with some powerful tools the data can be transformed into R-friendly data frames for further processing and visualisation. The real power in visualisations is making them interactive using RShiny.
+
+## Housekeeping
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.

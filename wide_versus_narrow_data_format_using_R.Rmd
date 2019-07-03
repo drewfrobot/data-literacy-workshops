@@ -1,0 +1,116 @@
+---
+title: "Wide versus Narrow Data Format - Using R - by drewfrobot 2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+##Wide versus Narrow Data Format - Using R
+
+```{r}
+if (!require('ggplot2', character.only=T, quietly=T)) {
+  install.packages('ggplot2')
+  library('ggplot2', character.only=T)
+}
+if (!require('curl', character.only=T, quietly=T)) {
+  install.packages('curl')
+  library('curl', character.only=T)
+}
+if (!require('reshape2', character.only=T, quietly=T)) {
+  install.packages('reshape2')
+  library('reshape2', character.only=T)
+}
+```
+
+Let's take the example of a hypothetical Library, and look at the statistics the front desk might collect. For example the desk staff might use an online form such as the Google Form shown below, tallying stats for various enquiry types over a given time period, then submitting the form at the end of that time period.
+
+![image1](https://raw.githubusercontent.com/drewfrobot/data-literacy-workshops/master/data/Hypothetical_Library_Queries_Form.png)
+
+The form data is stored in a Google Spreadsheet shown below.
+
+![image2](https://raw.githubusercontent.com/drewfrobot/data-literacy-workshops/master/data/Hypothetical_Library_Queries_Form_Spreadsheet.png)
+
+The following csv file is an exported version of the Google Spreadsheet above, and shows the statistics have been collected over six different time periods each day. Each submission details the date, time of day period, and a column for each enquiry category with a random generated tally.
+
+So, let's begin by importing the raw statistics into the R environment.
+
+```{r}
+df <- read.csv(curl('https://raw.githubusercontent.com/drewfrobot/data-literacy-workshops/master/data/Hypothetical_Library_Queries.csv'))
+df[is.na(df)] <- 0
+head(df[order(df$Date,df$Time),],10)
+```
+
+They are a classic example of a wide, response data format. Easily read by people, not so easily read by machines eg Skynet.
+
+The categories of each interaction each have their own column. It is a presentation format, once again easy for people to read but for a machine to read and perform an analysis and to take advantage of powerful analysis tools it needs to be converted to tall or long or narrow format.
+
+This can easily be achieved for example using a 'melt' function in the reshape library.
+
+```{r}
+df2=melt(df,id_vars=c('Timestamp','Date','Time'),na.rm=TRUE)
+head(df2[order(df2$Date,df2$Time),],20)
+```
+
+The narrow format is often referred to as EAV or Entity-attribute-value format. Here the entity is the date/time period event, and the attribute is the query category. Every line is simply an entity with an attribute and a value, which is much easier for machines to deal with.
+
+Now we can perform an analysis and present results. Let's say we would like to know on average which time periods on which weekdays are the busiest at the enquiries desk. Firstly, let's make convert the Date column to Date format add a column which gives the day of the week. Here 0 is Sunday and 6 is Saturday. The day of the week will become part of the entity component.
+
+```{r}
+df2$Date <- as.Date(df2$Date,"%m/%d/%Y")
+df2$dayofweek <- format(as.Date(df2$Date),"%w")
+head(df2[order(df2$Date,df2$Time),],10)
+```
+
+Now we can perform an aggregation to find the average (median) number of interactions per day of week and time period. Here we pivot or recast the data back into a wide format for people to view the summary or result.
+
+```{r}
+df3 <- aggregate(value~Date+Time+dayofweek,df2,sum)
+df4 <- aggregate(value~Time+dayofweek,df3,median)
+df5 <- dcast(df4,Time~dayofweek,value.var="value")
+df5
+```
+
+Let's do a quick, no nonsense graph to display the table.
+
+```{r}
+p<-ggplot(df4, aes(x=Time, y=value,fill=dayofweek)) +
+  geom_bar(stat="identity",position=position_dodge())+coord_fixed(ratio = 0.1)
+print(p)
+```
+
+What if we wanted to show the interactions for each category over a particular month, say March 2018.
+
+The raw data is hidden away in a table, there's no real need to look at it constantly, we can simply pose different questions and run any subsequent analysis without changing the raw data.
+
+Here is a table view of the interactions per category for March 2018. Here we once again recast the data back into a wide format to view the results.
+
+```{r}
+
+df6=df2[format.Date(df2$Date, "%m")=="03" & format.Date(df2$Date, "%y")=="18",]
+df7 <- aggregate(value~Date+variable,df6,sum)
+df8 <- dcast(df7,variable~Date,value.var="value")
+df8
+```
+
+Once again, let's do a quick, no nonsense graph to display the table.
+
+```{r}
+df9 <-rbind(df7[df7$variable=='Catalogue',],df7[df7$variable=='Reference',])
+p<-ggplot(df9, aes(x=Date, y=value,group=variable)) +
+  geom_line(aes(linetype=variable, color=variable),size=1.5)
+print(p)
+```
+
+So in summary, wide format, whilst ideal for survey responses and displaying data to people, is not an ideal format to work with when using data analysis tools, such as R. Converting to narrow data format allows the use of very powerful tools, and then the results can be pivoted or recast back into a wide format which is then easy for people to read and ponder.
+
+##Housekeeping
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
